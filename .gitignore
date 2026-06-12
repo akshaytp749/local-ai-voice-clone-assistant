@@ -1,0 +1,15 @@
+# Python
+__pycache__/
+*.pyc
+venv/
+python311/
+
+# Logs
+*.log
+*.err
+
+# Personal voice data (samples, manifest, synthesized cache)
+voices/
+
+# Tooling / local state
+.claude/

@@ -1,0 +1,172 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Local AI Voice Clone Assistant</title>
+  <meta name="description" content="Local AI voice assistant with zero-shot voice cloning." />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@700;900&family=Share+Tech+Mono&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="/static/style.css" />
+</head>
+<body>
+
+  <!-- -- Animated aurora / mesh-gradient background ----------------- -->
+  <div class="aurora" aria-hidden="true">
+    <span class="aurora-blob aurora-blob--1"></span>
+    <span class="aurora-blob aurora-blob--2"></span>
+    <span class="aurora-blob aurora-blob--3"></span>
+  </div>
+  <div class="grain" aria-hidden="true"></div>
+
+  <!-- -- Toast notifications ---------------------------------------- -->
+  <div class="toast-stack" id="toastStack" aria-live="polite" aria-atomic="false"></div>
+
+  <!-- -- Top-left: system stats ------------------------------------ -->
+  <div class="corner corner--tl" aria-label="System status">
+    <div class="stat-line">
+      <span class="stat-dot" id="dotLlm">●</span>
+      LLM: <span class="stat-val" id="statLlm">CONNECTING</span>
+    </div>
+    <div class="stat-line">
+      <span class="stat-dot" id="dotTts">●</span>
+      TTS: <span class="stat-val" id="statTts">—</span>
+    </div>
+    <div class="stat-line">
+      <span class="stat-dot stat-dot--dim">●</span>
+      VOICE: <span class="stat-val" id="statVoice">—</span>
+    </div>
+  </div>
+
+  <!-- -- Top-right: system info ----------------------------------- -->
+  <div class="corner corner--tr" aria-label="System info">
+    <div class="stat-line stat-line--r">
+      STATUS: <span class="stat-val" id="statStatus">INIT [o]</span>
+    </div>
+    <div class="stat-line stat-line--r">
+      OS: <span class="stat-val stat-val--dim">VOICE-CLONE v1.0</span>
+    </div>
+    <div class="stat-line stat-line--r">
+      MODEL: <span class="stat-val" id="statModel">—</span>
+    </div>
+  </div>
+
+  <!-- -- Floating controls ---------------------------------------- -->
+  <div class="ctrl-strip" aria-label="Controls">
+    <label class="toggle-wrap" title="Toggle voice output" aria-label="Toggle voice">
+      <input type="checkbox" id="toggleSpeak" checked />
+      <span class="toggle-track"><span class="toggle-thumb"></span></span>
+      <span class="toggle-label">VOICE</span>
+    </label>
+    <select id="voiceSelect" class="voice-select" aria-label="Select voice"></select>
+    <button class="icon-btn" id="btnVoiceStudio" title="Voice Studio" aria-label="Open Voice Studio">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14">
+        <circle cx="12" cy="12" r="3"/>
+        <path d="M19.07 4.93a10 10 0 0 1 0 14.14M4.93 4.93a10 10 0 0 0 0 14.14"/>
+      </svg>
+    </button>
+  </div>
+
+  <!-- -- Main HUD ------------------------------------------------- -->
+  <main class="hud" role="main">
+
+    <!-- Centerpiece — WebGL shader plasma orb + live audio spectrum -->
+    <div class="orb-wrap" id="orbWrap" aria-live="polite" aria-label="Assistant state">
+      <!-- Live audio spectrum — reacts to the cloned voice and your mic -->
+      <canvas class="viz" id="vizCanvas" aria-hidden="true"></canvas>
+      <!-- Thin glass frame ring -->
+      <div class="orb-frame" aria-hidden="true"></div>
+      <!-- Fluid plasma orb (fragment shader) -->
+      <canvas class="orb-gl" id="orbGl" aria-hidden="true"></canvas>
+      <div class="orb-state-label" id="orbLabel">IDLE</div>
+    </div>
+
+    <!-- Chat transcript (terminal style) -->
+    <section class="chat-panel" aria-label="Conversation">
+      <div class="chat-messages" id="chatMessages" role="log" aria-live="polite">
+        <p class="chat-empty" id="chatEmpty">// Awaiting command...</p>
+      </div>
+    </section>
+
+    <!-- Input bar -->
+    <div class="input-bar" role="form">
+      <button class="mic-btn" id="micBtn" aria-label="Record voice" title="Click to talk — records, transcribes locally, and sends">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" width="22" height="22">
+          <rect x="9" y="2" width="6" height="13" rx="3"/>
+          <path d="M5 10a7 7 0 0 0 14 0"/>
+          <line x1="12" y1="19" x2="12" y2="22"/>
+          <line x1="8" y1="22" x2="16" y2="22"/>
+        </svg>
+      </button>
+      <div class="input-wrap">
+        <span class="input-prompt">›</span>
+        <input
+          type="text"
+          id="chatInput"
+          class="chat-input"
+          placeholder="Type a message, or tap the mic to talk..."
+          autocomplete="off"
+          aria-label="Chat message input"
+        />
+      </div>
+      <button class="send-btn" id="sendBtn" aria-label="Send message" title="Send (Enter)">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" width="20" height="20">
+          <line x1="22" y1="2" x2="11" y2="13"/>
+          <polygon points="22 2 15 22 11 13 2 9 22 2"/>
+        </svg>
+      </button>
+    </div>
+
+  </main>
+
+  <!-- -- Voice Studio (slide-in panel) --------------------------- -->
+  <aside class="voice-studio" id="voiceStudio" aria-label="Voice Studio" aria-hidden="true">
+    <div class="studio-header">
+      <h2 class="studio-title">VOICE STUDIO</h2>
+      <button class="icon-btn" id="btnCloseStudio" aria-label="Close Voice Studio">✕</button>
+    </div>
+
+    <div class="studio-voices" id="studioVoices" aria-label="Configured voices"></div>
+
+    <div class="studio-add">
+      <h3 class="studio-section-title">ADD VOICE</h3>
+
+      <div class="form-group">
+        <label class="form-label" for="voiceName">Name</label>
+        <input type="text" id="voiceName" class="form-input" placeholder="e.g. Alice" />
+      </div>
+
+      <div class="form-group">
+        <label class="form-label" for="voiceFile">
+          Audio sample <small>(5–15 seconds of clean speech)</small>
+        </label>
+        <label class="file-drop" id="fileDrop" for="voiceFile" tabindex="0" role="button">
+          <input type="file" id="voiceFile" accept="audio/*,video/mpeg,.mpeg,.mpg,.mp4,.m4a,.mp3,.wav,.flac,.ogg,.aac,.wma" hidden aria-label="Upload voice sample" />
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" width="24" height="24">
+            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+            <polyline points="17 8 12 3 7 8"/>
+            <line x1="12" y1="3" x2="12" y2="15"/>
+          </svg>
+          <span id="fileLabel">Drop audio or click to browse</span>
+        </label>
+      </div>
+
+      <div class="form-group">
+        <label class="form-label" for="voiceTranscript">
+          Transcript <small>(optional — skips Whisper)</small>
+        </label>
+        <textarea id="voiceTranscript" class="form-input form-textarea" rows="3"
+          placeholder="Paste what is said in the audio sample…"></textarea>
+      </div>
+
+      <button class="btn-primary" id="btnAddVoice">ADD VOICE</button>
+      <div class="add-status" id="addStatus" hidden></div>
+    </div>
+  </aside>
+
+  <div class="overlay" id="overlay" aria-hidden="true"></div>
+  <script src="/static/orb.js"></script>
+  <script src="/static/app.js"></script>
+</body>
+</html>
