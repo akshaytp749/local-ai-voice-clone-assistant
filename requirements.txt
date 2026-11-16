@@ -8,6 +8,7 @@ imageio-ffmpeg>=0.5.0
 # Web framework
 fastapi>=0.104.0
 uvicorn[standard]>=0.24.0
+python-multipart>=0.0.9   # required by FastAPI for the voice/mic uploads
 
 # TTS - F5-TTS zero-shot voice cloning
 f5-tts>=1.1.0

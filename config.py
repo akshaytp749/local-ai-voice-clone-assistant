@@ -8,10 +8,15 @@ import os
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
+# The values most likely to differ per machine can be overridden with
+# environment variables (same names), so switching model or port doesn't need
+# a code edit: OLLAMA_MODEL, OLLAMA_HOST, TTS_NFE_STEP, UI_HOST, UI_PORT.
+
 # LLM
-OLLAMA_MODEL = "qwen3.5:2b"
-OLLAMA_URL = "http://localhost:11434/api/generate"
-OLLAMA_CHAT_URL = "http://localhost:11434/api/chat"
+OLLAMA_MODEL = os.environ.get("OLLAMA_MODEL", "qwen3.5:2b")
+OLLAMA_HOST = os.environ.get("OLLAMA_HOST", "http://localhost:11434").rstrip("/")
+OLLAMA_URL = f"{OLLAMA_HOST}/api/generate"
+OLLAMA_CHAT_URL = f"{OLLAMA_HOST}/api/chat"
 
 # Keep the model resident in VRAM between requests. Without this Ollama
 # unloads after its 5-minute default and the next question pays a full
@@ -58,11 +63,12 @@ TTS_FIRST_CHUNK_CHARS = 24
 # almost linearly with this. On an RTX 4060, 32 runs ~1.9x slower than
 # real-time; 24 is a good balance (~25% faster, usually imperceptible);
 # 16 is near real-time but audibly lower quality. Raise to 32 for best audio.
-TTS_NFE_STEP = 16
+TTS_NFE_STEP = int(os.environ.get("TTS_NFE_STEP", "16"))
 
-# UI
-UI_HOST = "127.0.0.1"
-UI_PORT = 8000
+# UI. Keep the default on loopback: the server has no auth, and anyone who can
+# reach it can upload voices and drive the GPU.
+UI_HOST = os.environ.get("UI_HOST", "127.0.0.1")
+UI_PORT = int(os.environ.get("UI_PORT", "8000"))
 
 # Sentence detection
 SENTENCE_END_CHARS = (".", "!", "?", "...")
