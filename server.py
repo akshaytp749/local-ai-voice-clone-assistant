@@ -229,6 +229,29 @@ def _encode_wav(audio, sr: int) -> bytes:
     return buf.getvalue()
 
 
+def trim_history(history: list[dict[str, str]], max_messages: int) -> None:
+    """Drop the oldest messages in place, in whole user/assistant pairs, so the
+    list never exceeds ``max_messages`` and still starts with a user turn."""
+    if len(history) > max_messages:
+        excess = len(history) - max_messages
+        excess += excess % 2
+        del history[:excess]
+
+
+def close_turn(history: list[dict[str, str]], response: str) -> None:
+    """Record the assistant reply for the turn whose user message is last.
+
+    A turn that produced nothing usable (LLM error, or stopped before the first
+    sentence) removes its user message instead. Leaving it would put two user
+    messages back to back on the next request, and the model would answer the
+    failed question as well as the new one.
+    """
+    if response and not response.startswith("[Error]"):
+        history.append({"role": "assistant", "content": response})
+    elif history and history[-1]["role"] == "user":
+        history.pop()
+
+
 @app.websocket("/ws/chat")
 async def ws_chat(websocket: WebSocket) -> None:
     """Stream LLM sentences and per-sentence cloned-voice audio to the client.
@@ -241,11 +264,17 @@ async def ws_chat(websocket: WebSocket) -> None:
       binary frame: one cloned-voice chunk as 16-bit WAV bytes
       {"type": "token",    "text": "<sentence>"}      — LLM sentence arrived
       {"type": "done",     "full": "<response>"}      — full response complete
+                                                        ("interrupted": true if cut short)
       {"type": "speaking", "state": true|false}       — TTS stream start/end
       {"type": "error",    "msg":  "<message>"}       — something went wrong
 
     Client -> server JSON:
       {"text": "...", "voice_id": "alice", "speak": true}
+      {"type": "stop"}                                — stop the current reply
+
+    Interruption: a message that arrives while a reply is still being generated
+    cuts that reply short (the LLM stream is closed and queued speech is
+    dropped). If it carries text, it becomes the next turn.
     """
     await websocket.accept()
     loop = asyncio.get_running_loop()
@@ -272,9 +301,28 @@ async def ws_chat(websocket: WebSocket) -> None:
     def _send_audio_threadsafe(data: bytes) -> None:
         asyncio.run_coroutine_threadsafe(_send_audio(data), loop)
 
+    # One receive is always pending, including while a reply is generated, so
+    # a "stop" or a new question can interrupt it. A receive that did not fire
+    # during a turn is kept and awaited at the top of the next loop.
+    recv_task: asyncio.Task | None = None
+    pending: dict | None = None  # message that interrupted the previous turn
+
     try:
         while True:
-            data = await websocket.receive_json()
+            if pending is not None:
+                data, pending = pending, None
+            else:
+                if recv_task is None:
+                    recv_task = asyncio.create_task(websocket.receive_json())
+                data = await recv_task
+                recv_task = None
+
+            if data.get("type") == "stop":
+                # Nothing is generating (that case is handled below), but
+                # speech for the finished reply may still be synthesising.
+                tts_gen += 1
+                continue
+
             text: str = (data.get("text") or "").strip()
             voice_id: str = data.get("voice_id") or default_voice_id() or ""
             speak_enabled: bool = bool(data.get("speak", True))
@@ -322,28 +370,53 @@ async def ws_chat(websocket: WebSocket) -> None:
             # ask_streaming() is a blocking generator, so we run it in a
             # thread and feed sentences back to the async context via a queue.
             sentence_q: _queue.Queue = _queue.Queue()
+            cancel = threading.Event()
 
-            def _run_llm(msgs=list(history)) -> None:
+            def _run_llm(msgs=list(history), cancel=cancel, out=sentence_q) -> None:
+                gen = ask_streaming(msgs)
                 try:
-                    for sentence in ask_streaming(msgs):
+                    for sentence in gen:
+                        if cancel.is_set():
+                            break
                         s = sentence.strip()
                         if s:
-                            sentence_q.put(s)
+                            out.put(s)
                 except Exception as exc:
-                    sentence_q.put(exc)
+                    out.put(exc)
                 finally:
-                    sentence_q.put(None)  # sentinel
+                    gen.close()    # closes the HTTP stream, so Ollama stops generating
+                    out.put(None)  # sentinel
 
             loop.run_in_executor(None, _run_llm)
 
             full_response = ""
             synth_buf = ""   # batches short sentences before handing to TTS
             first_chunk = True
+            interrupted = False
+            failed = False
+            if recv_task is None:
+                recv_task = asyncio.create_task(websocket.receive_json())
             while True:
-                item = await loop.run_in_executor(None, sentence_q.get)
+                get_task = loop.run_in_executor(None, sentence_q.get)
+                await asyncio.wait({get_task, recv_task}, return_when=asyncio.FIRST_COMPLETED)
+                if recv_task.done():
+                    # The client spoke over the reply: stop the LLM, drop
+                    # queued speech, and let the reader thread finish.
+                    interrupted = True
+                    cancel.set()
+                    tts_gen += 1
+                    while await get_task is not None:
+                        get_task = loop.run_in_executor(None, sentence_q.get)
+                    msg = recv_task.result()  # re-raises WebSocketDisconnect
+                    recv_task = None
+                    if (msg.get("text") or "").strip():
+                        pending = msg
+                    break
+                item = get_task.result()
                 if item is None:
                     break
                 if isinstance(item, Exception):
+                    failed = True
                     await _send({"type": "error", "msg": str(item)})
                     break
                 full_response = (full_response + " " + item).strip()
@@ -363,19 +436,20 @@ async def ws_chat(websocket: WebSocket) -> None:
             # Flush any remainder, then close the queue; the worker emits
             # speaking:false when drained.
             if synth_thread is not None:
-                if synth_buf:
+                if synth_buf and not interrupted:
                     synth_q.put(synth_buf)
                 synth_q.put(None)
 
-            await _send({"type": "done", "full": full_response})
+            done_msg: dict = {"type": "done", "full": full_response}
+            if interrupted:
+                done_msg["interrupted"] = True
+            await _send(done_msg)
 
             # -- Update conversation memory --------------------------------
-            if full_response and not full_response.startswith("[Error]"):
-                history.append({"role": "assistant", "content": full_response})
-            if len(history) > MAX_HISTORY_MESSAGES:
-                excess = len(history) - MAX_HISTORY_MESSAGES
-                excess += excess % 2  # drop whole user/assistant pairs
-                del history[:excess]
+            # An interrupted reply keeps what was said so far; a failed or
+            # empty turn is removed entirely (see close_turn).
+            close_turn(history, "" if failed else full_response)
+            trim_history(history, MAX_HISTORY_MESSAGES)
 
     except WebSocketDisconnect:
         pass
@@ -384,6 +458,10 @@ async def ws_chat(websocket: WebSocket) -> None:
             await _send({"type": "error", "msg": str(exc)})
         except Exception:
             pass
+    finally:
+        tts_gen += 1  # connection is gone: let any synth worker drain and exit
+        if recv_task is not None and not recv_task.done():
+            recv_task.cancel()
 
 
 # ---------------------------------------------------------------------------

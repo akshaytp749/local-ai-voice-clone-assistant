@@ -376,6 +376,43 @@ function sendMessage() {
 }
 
 // ===================================================================
+// Interrupt — stop the reply that is being written or spoken
+// (Escape, or click the orb). Silences local playback at once and tells
+// the server to stop the LLM stream and drop queued speech.
+// ===================================================================
+
+function interruptTurn() {
+  if (!chatInput.disabled || recording) return;   // nothing in progress
+  audioTurn++;                 // discard chunks still decoding / in flight
+  stopAllAudio();
+  stopViz();
+  audioStreamEnded = true;
+  expectAudio = false;         // so the server's 'done' ends the turn
+  if (ws && ws.readyState === WebSocket.OPEN) {
+    ws.send(JSON.stringify({ type: 'stop' }));
+  }
+  if (!activeBubble) {
+    // Text had already finished ('done' seen); only speech was left.
+    setOrb(ORB_STATES.IDLE);
+    setInputEnabled(true);
+    chatInput.focus();
+  }
+  // Otherwise the server answers with {type:'done', interrupted:true},
+  // which finalises the partial bubble and re-enables the input.
+}
+
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape' && chatInput.disabled && !recording) {
+    e.preventDefault();
+    interruptTurn();
+  }
+});
+if (orbWrap) {
+  orbWrap.addEventListener('click', interruptTurn);
+  orbWrap.title = 'Click or press Esc to stop the reply';
+}
+
+// ===================================================================
 // Voice input — record mic, transcribe locally via Whisper, then send
 // ===================================================================
 

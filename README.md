@@ -24,6 +24,7 @@ much slower.
 - **Talk to it** - click the mic, speak, and your words are transcribed locally by Whisper (audio never leaves your machine, no cloud speech API).
 - **Cloned voice plays in the browser** - TTS audio streams to the client over WebSocket and plays via the Web Audio API, so it works from a phone or another device on your network, not just the server's speakers.
 - **Sentence-streaming TTS** - each sentence is synthesised and spoken as soon as it's ready while the LLM keeps writing, so the first words start fast.
+- **Interruptible** - press `Esc` or click the orb to cut a reply short; the LLM stream is closed and queued speech is dropped, so the next question starts immediately.
 - **Conversation memory** - the assistant remembers the last several turns (Ollama `/api/chat`).
 - **Voice preloading** - switching voices triggers background preload so the first reply is near-instant.
 - **Reference audio auto-trimming** - clips longer than 10 seconds are trimmed automatically because F5-TTS produces garbled output beyond that limit.
@@ -112,6 +113,8 @@ local-ai-voice-clone-assistant/
 ## Configuration
 
 Edit `config.py` to change any of the following:
+
+`OLLAMA_MODEL`, `OLLAMA_HOST`, `TTS_NFE_STEP`, `UI_HOST` and `UI_PORT` can also be set as environment variables of the same name, without editing the file.
 
 | Setting | Default | Description |
 |---|---|---|
